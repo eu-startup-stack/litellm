@@ -1,4 +1,4 @@
-name: "Unit Tests: Enterprise, Google GenAI & Routing"
+name: "Unit Tests: Google GenAI & Routing"
 
 on:
   pull_request:
@@ -18,14 +18,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  enterprise-routing:
+  routing:
     uses: ./.github/workflows/_test-unit-base.yml
     with:
       test-path: >-
-        tests/test_litellm/enterprise
         tests/test_litellm/google_genai
         tests/test_litellm/router_utils
         tests/test_litellm/router_strategy
       workers: 2
       reruns: 2
-      artifact-name: enterprise-routing
+      artifact-name: routing

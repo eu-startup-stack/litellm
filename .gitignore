@@ -130,3 +130,12 @@ crash.*.log
 
 # pytest coverage data
 .coverage
+
+# Next.js static-export bundle checked into the proxy so the served UI works
+# without a local build. Rebuilt by CircleCI (e2e_ui_testing) and Docker
+# (Dockerfile / docker/Dockerfile.{database,non_root} via the ui-builder stage).
+litellm/proxy/_experimental/out/
+
+# Tracked symlink to the deleted enterprise/ workspace; keep it out of git so
+# the wheel build never tries to follow a dangling target again.
+litellm/proxy/enterprise

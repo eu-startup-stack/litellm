@@ -63,7 +63,7 @@ def scan_litellm_files(base_dir):
     Returns a dictionary mapping file paths to lists of assignments.
     """
     violations = {}
-    litellm_dirs = ["litellm", "enterprise"]
+    litellm_dirs = ["litellm"]
 
     for litellm_dir in litellm_dirs:
         dir_path = os.path.join(base_dir, litellm_dir)

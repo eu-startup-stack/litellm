@@ -79,7 +79,6 @@ class SupportedGuardrailIntegrations(Enum):
     LAKERA = "lakera"
     LAKERA_V2 = "lakera_v2"
     PRESIDIO = "presidio"
-    HIDE_SECRETS = "hide-secrets"
     HIDDENLAYER = "hiddenlayer"
     AIM = "aim"
     CATO_NETWORKS = "cato_networks"

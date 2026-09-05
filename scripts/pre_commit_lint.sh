@@ -25,8 +25,7 @@ staged_match() { printf '%s\n' "$staged" | grep -E "$1" || true; }
 # scripts-only commit can't turn it red; scope the trigger there to skip the slow
 # make lint when it couldn't catch anything.
 litellm_py_files=$(staged_match '^litellm/.*\.py$')
-# ruff format (and CI's format step) skip enterprise; the rest of make lint covers it.
-fmt_files=$(printf '%s\n' "$litellm_py_files" | grep -v '^litellm/enterprise/' || true)
+fmt_files=$litellm_py_files
 # check-ui-api-types.yml triggers on any file under litellm/proxy or litellm/types
 # (Prisma schema and configs included, not just Python) plus the generator and its
 # lockfiles, so match that whole trigger set rather than a Python subset.
@@ -95,7 +94,7 @@ if [ -n "$litellm_py_files" ]; then
     # cover a brand-new commit before it lands.
     if [ -n "$fmt_files" ]; then
         echo "pre-commit: ruff format --check (staged litellm files)"
-        printf '%s\n' "$fmt_files" | xargs uv run --no-sync ruff format --check --exclude '/enterprise/' \
+        printf '%s\n' "$fmt_files" | xargs uv run --no-sync ruff format --check \
             || { echo "✗ Unformatted staged files. Fix with: make format, then re-stage." >&2; status=1; }
     fi
 fi

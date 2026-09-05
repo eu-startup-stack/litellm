@@ -106,9 +106,6 @@ jobs:
       - name: prevent_key_leaks_in_exceptions
         run: uv run --no-sync python ./tests/code_coverage_tests/prevent_key_leaks_in_exceptions.py
 
-      - name: check_unsafe_enterprise_import
-        run: uv run --no-sync python ./tests/code_coverage_tests/check_unsafe_enterprise_import.py
-
       - name: ban_copy_deepcopy_kwargs
         run: uv run --no-sync python ./tests/code_coverage_tests/ban_copy_deepcopy_kwargs.py
 

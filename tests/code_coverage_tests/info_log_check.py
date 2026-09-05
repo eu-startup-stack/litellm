@@ -302,7 +302,7 @@ def check_sensitive_logging(base_dir: str) -> List[Dict[str, Any]]:
     all_violations = []
 
     # Directories to scan - only main litellm codebase
-    scan_dirs = ["litellm", "enterprise"]  # Include enterprise directory if it exists
+    scan_dirs = ["litellm"]
 
     # Directories to exclude (third-party code, venvs, etc.)
     exclude_dirs = {

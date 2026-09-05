@@ -11,7 +11,6 @@ on:
       - "uv.lock"
       - "pyproject.toml"
       - "litellm-proxy-extras/pyproject.toml"
-      - "enterprise/pyproject.toml"
 
 permissions: {}
 
@@ -129,7 +128,6 @@ jobs:
 
           check_deps base/pyproject.toml pr/pyproject.toml "pyproject.toml" || had_error=1
           check_deps base/litellm-proxy-extras/pyproject.toml pr/litellm-proxy-extras/pyproject.toml "litellm-proxy-extras/pyproject.toml" || had_error=1
-          check_deps base/enterprise/pyproject.toml pr/enterprise/pyproject.toml "enterprise/pyproject.toml" || had_error=1
 
           if [ "$had_error" -ne 0 ]; then
             echo ""

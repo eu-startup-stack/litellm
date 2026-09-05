@@ -84,15 +84,6 @@ const RATE_LIMIT_EXTRA = [
 
 const BUDGET_MATCH = ["budget exceeded", "crossed budget", "provider budget"];
 
-const ENTERPRISE_MATCH = [
-  "must be a litellm enterprise user",
-  "only be available for liteLLM enterprise users",
-  "missing litellm-enterprise package",
-  "only available on the docker image",
-  "enterprise feature",
-  "premium user",
-];
-
 const VALIDATION_MATCH = [
   "invalid json payload",
   "invalid request type",
@@ -153,7 +144,6 @@ function titleFor(status?: number, desc?: string): string {
   if (FORBIDDEN_MATCH.some((s) => d.includes(s))) return "Access Denied";
   if (DB_MATCH?.some?.((s: string) => d.includes(s)) || status === 503) return "Service Unavailable";
   if (BUDGET_MATCH?.some?.((s: string) => d.includes(s))) return "Budget Exceeded";
-  if (ENTERPRISE_MATCH?.some?.((s: string) => d.includes(s))) return "Feature Unavailable";
   if (ROUTER_MATCH?.some?.((s: string) => d.includes(s))) return "Routing Error";
 
   if (EXISTS_MATCH.some((s) => d.includes(s))) return "Already Exists";
@@ -205,13 +195,6 @@ const SUCCESS_MATCH = [
 
 const INFO_MATCH = ["rate limit reached for deployment", "deployment cooldown period active"];
 
-const DEPRECATION_FEATURE_WARN_MATCH = [
-  "this feature is only available for litellm enterprise users",
-  "enterprise features are not available",
-  "regenerating virtual keys is an enterprise feature",
-  "trying to set allowed_routes. this is an enterprise feature",
-];
-
 const CONFIG_WARN_MATCH = [
   "invalid maximum_spend_logs_retention_interval value",
   "error has invalid or non-convertible code",
@@ -222,7 +205,6 @@ function classifyGeneralMessage(desc?: string): { kind: "success" | "info" | "wa
   const d = (desc || "").toLowerCase();
 
   if (SUCCESS_MATCH.some((s) => d.includes(s))) return { kind: "success", title: "Success" };
-  if (DEPRECATION_FEATURE_WARN_MATCH.some((s) => d.includes(s))) return { kind: "warning", title: "Feature Notice" };
   if (CONFIG_WARN_MATCH.some((s) => d.includes(s))) return { kind: "warning", title: "Configuration Warning" };
   if (INFO_MATCH.some((s) => d.includes(s))) return { kind: "warning", title: "Rate Limit" }; // show as warning for visibility
 
@@ -322,7 +304,6 @@ const NotificationManager = {
         title === "Rate Limit Exceeded" ||
         title === "Info" ||
         title === "Budget Exceeded" ||
-        title === "Feature Unavailable" ||
         title === "Content Blocked" ||
         title === "Integration Error"
       ) {
