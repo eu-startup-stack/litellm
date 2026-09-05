@@ -7660,3 +7660,24 @@ def test_has_user_setup_sso_keeps_existing_env_var_paths():
         patch("litellm.proxy.proxy_server.general_settings", {}),
     ):
         assert _has_user_setup_sso() is True
+
+
+def test_has_user_setup_sso_returns_false_for_truthy_non_bool_setting():
+    """Discovery and the route branch must agree on what 'enabled' means.
+
+    The same setting is read at two sites with the same strict ``is True``
+    check. A non-bool truthy value (e.g. a YAML-quoted ``"true"``) must not
+    flip SSO discovery on while the route branch refuses it; both should
+    return False. Catches a divergence where one site uses ``bool(...)`` and
+    the other uses ``is True``.
+    """
+    from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"enable_authentik_proxy_auth": "true"},
+        ),
+    ):
+        assert _has_user_setup_sso() is False

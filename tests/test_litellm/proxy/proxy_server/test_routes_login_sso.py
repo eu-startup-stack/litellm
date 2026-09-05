@@ -181,6 +181,65 @@ def test_login_form_authenticate_raises_500(client, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Authentik proxy auth enabled: native login routes must remain available as
+# break-glass even when /sso/key/generate delegates to handle_authentik_ui_login.
+# ---------------------------------------------------------------------------
+
+
+def test_fallback_login_still_available_when_authentik_enabled(client, monkeypatch):
+    """Pin: with enable_authentik_proxy_auth=True, GET /fallback/login still
+    serves the native login form (200 HTML, not redirected)."""
+    from litellm.proxy import proxy_server as ps
+
+    monkeypatch.setattr(ps, "general_settings", {"enable_authentik_proxy_auth": True})
+    monkeypatch.delenv("UI_USERNAME", raising=False)
+
+    response = client.get("/fallback/login")
+    body_lower = response.text.lower()
+    shape = {
+        "status": response.status_code,
+        "content_type_html": response.headers.get("content-type", "").startswith(
+            "text/html"
+        ),
+        "has_form_or_username": "<form" in body_lower or "username" in body_lower,
+    }
+    assert shape == {
+        "status": 200,
+        "content_type_html": True,
+        "has_form_or_username": True,
+    }
+
+
+def test_login_form_still_authenticates_when_authentik_enabled(client, monkeypatch):
+    """Pin: with enable_authentik_proxy_auth=True, POST /login still authenticates
+    against the native flow (303 + token cookie + /ui/ redirect)."""
+    from litellm.proxy import proxy_server as ps
+
+    _install_login_mocks(monkeypatch)
+    monkeypatch.setattr(ps, "general_settings", {"enable_authentik_proxy_auth": True})
+
+    response = client.post(
+        "/login",
+        data={"username": "admin", "password": "password"},
+        follow_redirects=False,
+    )
+    location = response.headers.get("location", "")
+    set_cookie = response.headers.get("set-cookie", "")
+    shape = {
+        "status": response.status_code,
+        "location_has_ui": "/ui/" in location,
+        "location_has_login_success": "login=success" in location,
+        "has_token_cookie": "token=" in set_cookie,
+    }
+    assert shape == {
+        "status": 303,
+        "location_has_ui": True,
+        "location_has_login_success": True,
+        "has_token_cookie": True,
+    }
+
+
+# ---------------------------------------------------------------------------
 # POST /v2/login
 # ---------------------------------------------------------------------------
 

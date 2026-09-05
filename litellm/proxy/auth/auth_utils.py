@@ -1035,7 +1035,7 @@ def is_pass_through_provider_route(route: str) -> bool:
 
 def _has_user_setup_sso():
     """
-    Check if the user has set up single sign-on (SSO) by verifying the presence of Microsoft client ID, Google client ID or generic client ID and UI username environment variables.
+    Check if the user has set up single sign-on (SSO) by verifying the presence of Microsoft client ID, Google client ID or generic client ID environment variables, or by enabling the Authentik proxy auth provider in ``general_settings``.
     Returns a boolean indicating whether SSO has been set up.
     """
     from litellm.proxy.proxy_server import general_settings
@@ -1043,7 +1043,7 @@ def _has_user_setup_sso():
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)
     generic_client_id = os.getenv("GENERIC_CLIENT_ID", None)
-    authentik_proxy_enabled = bool(general_settings.get("enable_authentik_proxy_auth", False))
+    authentik_proxy_enabled = general_settings.get("enable_authentik_proxy_auth", False) is True
 
     sso_setup = (
         (microsoft_client_id is not None)
