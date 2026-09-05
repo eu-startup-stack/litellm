@@ -16,14 +16,20 @@ What this module does
   ``LitellmUserRoles`` values, with the highest-privilege match
   winning when several prefixed groups are present;
 - returns a single frozen ``AuthentikIdentity`` (user id, optional
-  email, optional display name, role) for downstream provisioning.
+  email, optional display name, role) for downstream provisioning;
+- delegates dashboard-session provisioning to the existing
+  ``SSOAuthenticationHandler.get_redirect_response_from_openid``
+  pipeline; lookup, upsert, key generation, JWT signing, cookies,
+  and redirects are NOT reimplemented here.
 
 What this module deliberately does NOT do
 
 - accept roles, budgets, models, permissions, or keys from
   headers — those are policy grants, never identity;
 - trust ``X-Forwarded-For`` — only the direct TCP peer is
-  authoritative for the trust decision.
+  authoritative for the trust decision;
+- reimplement user lookup, upsert, key generation, JWT signing,
+  cookies, or redirects.
 """
 
 from __future__ import annotations
@@ -31,10 +37,12 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import HTTPException, Request, status
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ConfigDict
 
 from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.auth.trusted_proxy_utils import require_trusted_proxy_request
+from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
 _AUTHENTIK_FEATURE_NAME = "Authentik proxy auth"
 _AUTHENTIK_GROUP_PREFIX_SETTING = "authentik_group_prefix"
@@ -66,7 +74,7 @@ class AuthentikIdentity(BaseModel):
     user_id: str
     email: str | None = None
     display_name: str | None = None
-    role: LitellmUserRoles | None = None
+    role: LitellmUserRoles
 
 
 def parse_authentik_groups(raw: str | None, prefix: str) -> tuple[str, ...]:
@@ -176,4 +184,39 @@ def authentik_identity_from_request(
         email=email,
         display_name=display_name,
         role=role,
+    )
+
+
+async def handle_authentik_ui_login(
+    request: Request,
+    return_to: str | None,
+) -> RedirectResponse:
+    """Resolve the trusted Authentik identity and hand it to the existing
+    SSO dashboard-session pipeline.
+
+    The pipeline (lookup, upsert, key generation, JWT signing, cookies,
+    redirects) is intentionally NOT reimplemented here; this module only
+    packages the identity into ``CustomOpenID`` and delegates.
+    """
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.proxy_server import general_settings
+
+    identity = authentik_identity_from_request(
+        request=request,
+        general_settings=general_settings,
+    )
+
+    openid = CustomOpenID(
+        id=identity.user_id,
+        email=identity.email,
+        display_name=identity.display_name,
+        provider="authentik",
+        team_ids=[],
+        user_role=identity.role,
+    )
+
+    return await SSOAuthenticationHandler.get_redirect_response_from_openid(
+        result=openid,
+        request=request,
+        return_to=return_to,
     )

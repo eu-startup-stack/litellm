@@ -7131,3 +7131,254 @@ async def test_legacy_login_page_hides_credentials_hint_via_general_settings():
     assert response.status_code == 200
     assert "Default Credentials" not in body
     assert "MASTER_KEY" not in body
+
+
+def _authentik_request_with_headers(
+    headers: dict[str, str],
+    *,
+    client_host: str = "127.0.0.1",
+):
+    from starlette.datastructures import Headers
+
+    scope = {
+        "type": "http",
+        "client": (client_host, 12345),
+        "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()],
+    }
+    request = Request(scope=scope)
+    request._headers = Headers(headers)
+    return request
+
+
+@pytest.mark.asyncio
+async def test_handle_authentik_ui_login_builds_custom_openid_and_delegates():
+    """Valid Authentik proxy headers become a CustomOpenID with the exact
+    fields the brief specifies, then flow into the existing SSO pipeline
+    rather than being reimplemented here.
+    """
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.auth.authentik_proxy import handle_authentik_ui_login
+
+    request = _authentik_request_with_headers(
+        {
+            "x-authentik-uid": "uid-abc",
+            "x-authentik-email": "alice@example.com",
+            "x-authentik-name": "Alice Smith",
+            "x-authentik-groups": "litellm-internal_user",
+        }
+    )
+
+    captured: dict = {}
+
+    async def _capture_redirect(*_args, **kwargs):
+        captured["result"] = kwargs.get("result")
+        captured["request"] = kwargs.get("request")
+        captured["return_to"] = kwargs.get("return_to")
+        return MagicMock()
+
+    with (
+        patch.dict(
+            "litellm.proxy.proxy_server.general_settings",
+            {
+                "trusted_proxy_ranges": ["127.0.0.1/32"],
+                "authentik_group_prefix": "litellm-",
+            },
+            clear=False,
+        ),
+        patch.object(
+            SSOAuthenticationHandler,
+            "get_redirect_response_from_openid",
+            side_effect=_capture_redirect,
+        ) as mock_redirect,
+    ):
+        await handle_authentik_ui_login(request=request, return_to="https://ui.example.com/")
+
+    mock_redirect.assert_called_once()
+    result = captured["result"]
+    assert isinstance(result, CustomOpenID)
+    assert result.id == "uid-abc"
+    assert result.email == "alice@example.com"
+    assert result.display_name == "Alice Smith"
+    assert result.provider == "authentik"
+    assert result.team_ids == []
+    assert result.user_role == LitellmUserRoles.INTERNAL_USER
+    assert captured["request"] is request
+    assert captured["return_to"] == "https://ui.example.com/"
+
+
+@pytest.mark.asyncio
+async def test_handle_authentik_ui_login_first_login_creates_user_through_existing_upsert():
+    """First dashboard login for an Authentik user must not duplicate: when
+    no user row exists, the existing pipeline's ``upsert_sso_user`` is
+    invoked with ``user_info=None`` so the user is created.
+
+    The delegation under test is ``handle_authentik_ui_login``; the
+    upsert reconciliation lives in
+    ``SSOAuthenticationHandler.get_user_info_from_db``, which the
+    pipeline calls with the ``CustomOpenID`` we built. To assert the
+    reconciliation contract without standing up a database, we capture
+    the ``CustomOpenID`` produced by the delegation and then drive
+    ``get_user_info_from_db`` with a mocked prisma client using the
+    same pattern that ``test_get_user_info_from_db_user_not_exists_creates_user``
+    already uses in this file.
+    """
+    from litellm.proxy._types import LitellmUserRoles, NewUserResponse
+    from litellm.proxy.auth.authentik_proxy import handle_authentik_ui_login
+    from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
+
+    request = _authentik_request_with_headers(
+        {
+            "x-authentik-uid": "uid-abc",
+            "x-authentik-email": "alice@example.com",
+            "x-authentik-groups": "litellm-internal_user",
+        }
+    )
+
+    captured: dict = {}
+
+    async def _capture_redirect(*_args, **kwargs):
+        captured["result"] = kwargs.get("result")
+        return MagicMock()
+
+    new_user = NewUserResponse(user_id="uid-abc", key="sk-xxx", teams=None)
+
+    with (
+        patch.dict(
+            "litellm.proxy.proxy_server.general_settings",
+            {
+                "trusted_proxy_ranges": ["127.0.0.1/32"],
+                "authentik_group_prefix": "litellm-",
+            },
+            clear=False,
+        ),
+        patch.object(
+            SSOAuthenticationHandler,
+            "get_redirect_response_from_openid",
+            side_effect=_capture_redirect,
+        ),
+    ):
+        await handle_authentik_ui_login(request=request, return_to=None)
+
+    openid = captured["result"]
+    assert isinstance(openid, CustomOpenID)
+    assert openid.user_role == LitellmUserRoles.INTERNAL_USER
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.get_existing_user_info_from_db",
+            AsyncMock(return_value=None),
+        ) as mock_get_existing,
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.upsert_sso_user",
+            AsyncMock(return_value=new_user),
+        ) as mock_upsert,
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.add_user_to_teams_from_sso_response",
+            AsyncMock(),
+        ),
+    ):
+        await get_user_info_from_db(
+            result=openid,
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+            user_email=openid.email,
+            user_defined_values=None,
+        )
+
+    mock_get_existing.assert_called_once()
+    assert mock_get_existing.call_args.kwargs["user_id"] == "uid-abc"
+    mock_upsert.assert_called_once()
+    assert mock_upsert.call_args.kwargs["user_info"] is None
+    assert mock_upsert.call_args.kwargs["result"] is openid
+
+
+@pytest.mark.asyncio
+async def test_handle_authentik_ui_login_role_change_updates_existing_user_through_existing_upsert():
+    """When the user already exists and the Authentik group assignment
+    changes their role, the existing pipeline's ``upsert_sso_user`` must
+    be invoked with the existing user so the row is updated rather than
+    duplicated.
+
+    Same pattern as the first-login test: capture the ``CustomOpenID``
+    produced by ``handle_authentik_ui_login`` and drive
+    ``get_user_info_from_db`` with a mocked prisma client returning an
+    existing user, mirroring
+    ``test_get_user_info_from_db_user_exists_updates_user``.
+    """
+    from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
+    from litellm.proxy.auth.authentik_proxy import handle_authentik_ui_login
+    from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
+
+    request = _authentik_request_with_headers(
+        {
+            "x-authentik-uid": "uid-abc",
+            "x-authentik-email": "alice@example.com",
+            "x-authentik-groups": "litellm-proxy_admin",
+        }
+    )
+
+    captured: dict = {}
+
+    async def _capture_redirect(*_args, **kwargs):
+        captured["result"] = kwargs.get("result")
+        return MagicMock()
+
+    existing_user = LiteLLM_UserTable(
+        user_id="uid-abc",
+        user_email="alice@example.com",
+        user_role="internal_user",
+        models=[],
+        teams=[],
+    )
+
+    with (
+        patch.dict(
+            "litellm.proxy.proxy_server.general_settings",
+            {
+                "trusted_proxy_ranges": ["127.0.0.1/32"],
+                "authentik_group_prefix": "litellm-",
+            },
+            clear=False,
+        ),
+        patch.object(
+            SSOAuthenticationHandler,
+            "get_redirect_response_from_openid",
+            side_effect=_capture_redirect,
+        ),
+    ):
+        await handle_authentik_ui_login(request=request, return_to=None)
+
+    openid = captured["result"]
+    assert isinstance(openid, CustomOpenID)
+    assert openid.user_role == LitellmUserRoles.PROXY_ADMIN
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.get_existing_user_info_from_db",
+            AsyncMock(return_value=existing_user),
+        ) as mock_get_existing,
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.upsert_sso_user",
+            AsyncMock(return_value=existing_user),
+        ) as mock_upsert,
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.add_user_to_teams_from_sso_response",
+            AsyncMock(),
+        ),
+    ):
+        await get_user_info_from_db(
+            result=openid,
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+            user_email=openid.email,
+            user_defined_values=None,
+        )
+
+    mock_get_existing.assert_called_once()
+    assert mock_get_existing.call_args.kwargs["user_id"] == "uid-abc"
+    mock_upsert.assert_called_once()
+    upsert_call_args = mock_upsert.call_args
+    assert upsert_call_args.kwargs["user_info"] is existing_user
+    assert upsert_call_args.kwargs["result"] is openid
