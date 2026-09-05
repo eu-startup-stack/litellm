@@ -52,7 +52,6 @@ def test_active_callbacks(client):
     expected_callback_names = [
         "lakeraAI_Moderation",
         "_OPTIONAL_PromptInjectionDetectio",
-        "_ENTERPRISE_SecretDetection",
     ]
 
     for callback_name in expected_callback_names:

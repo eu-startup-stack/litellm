@@ -24,9 +24,6 @@ litellm_settings:
     - prompt_injection:
         callbacks: [lakera_prompt_injection, detect_prompt_injection]
         default_on: true
-    - hide_secrets:
-        callbacks: [hide_secrets]
-        default_on: true
     - moderations:
         callbacks: [openai_moderations]
         default_on: false

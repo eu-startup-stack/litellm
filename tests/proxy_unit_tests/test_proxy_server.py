@@ -471,7 +471,7 @@ async def test_team_disable_guardrails(mock_acompletion, client_no_auth):
     request = Request(scope={"type": "http"})
     request._url = URL(url="/chat/completions")
 
-    body = {"metadata": {"guardrails": {"hide_secrets": False}}}
+    body = {"metadata": {"guardrails": {"prompt_injection": False}}}
     json_bytes = json.dumps(body).encode("utf-8")
 
     request._body = json_bytes

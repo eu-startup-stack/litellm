@@ -35,9 +35,6 @@ component_management:
     - component_id: "Proxy_Authentication"
       paths:
         - "*/proxy/auth/**"
-    - component_id: "Enterprise"
-      paths:
-        - "enterprise/**"
     - component_id: "Batches"
       paths:
         - "*/proxy/batches_endpoints/**"
