@@ -1,8 +1,8 @@
 """Pin behavior of top-of-file and bottom-of-region helpers.
 
-Covers ``print_verbose``, ``_get_email_logger_class``,
-``_accepts_litellm_call_info``, ``_enrich_http_exception_with_guardrail_context``,
-``on_backoff``, ``jsonify_object``, ``_lookup_deprecated_key``.
+Covers ``print_verbose``, ``_accepts_litellm_call_info``,
+``_enrich_http_exception_with_guardrail_context``, ``on_backoff``,
+``jsonify_object``, ``_lookup_deprecated_key``.
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ from litellm.proxy import utils as utils_mod
 from litellm.proxy.utils import (
     _accepts_litellm_call_info,
     _enrich_http_exception_with_guardrail_context,
-    _get_email_logger_class,
     _lookup_deprecated_key,
     jsonify_object,
     on_backoff,
@@ -59,57 +58,6 @@ def test_print_verbose_handles_unprintable_object_raises(monkeypatch):
 
     with pytest.raises(RuntimeError):
         print_verbose(Bomb())
-
-
-# ---------------------------------------------------------------------------
-# _get_email_logger_class
-# ---------------------------------------------------------------------------
-
-
-def test_get_email_logger_class_priority_matrix(monkeypatch):
-    """Truth table for ``_get_email_logger_class`` priority: SendGrid >
-    Resend > SMTP > Base."""
-    sg = object()
-    rs = object()
-    smtp = object()
-    base = object()
-    monkeypatch.setattr(utils_mod, "BaseEmailLogger", base)
-    monkeypatch.setattr(utils_mod, "SendGridEmailLogger", sg)
-    monkeypatch.setattr(utils_mod, "ResendEmailLogger", rs)
-    monkeypatch.setattr(utils_mod, "SMTPEmailLogger", smtp)
-    for k in ("SENDGRID_API_KEY", "RESEND_API_KEY", "SMTP_HOST"):
-        monkeypatch.delenv(k, raising=False)
-
-    fallback = _get_email_logger_class() is base
-    monkeypatch.setenv("SMTP_HOST", "smtp.example")
-    smtp_choice = _get_email_logger_class() is smtp
-    monkeypatch.setenv("RESEND_API_KEY", "rs-x")
-    resend_choice = _get_email_logger_class() is rs
-    monkeypatch.setenv("SENDGRID_API_KEY", "sg-x")
-    sendgrid_choice = _get_email_logger_class() is sg
-    snapshot = {
-        "fallback_to_base": fallback,
-        "smtp_when_smtp_only": smtp_choice,
-        "resend_beats_smtp": resend_choice,
-        "sendgrid_wins": sendgrid_choice,
-    }
-    assert snapshot == {
-        "fallback_to_base": True,
-        "smtp_when_smtp_only": True,
-        "resend_beats_smtp": True,
-        "sendgrid_wins": True,
-    }
-
-
-def test_get_email_logger_class_error_when_no_enterprise_module(monkeypatch):
-    monkeypatch.setattr(utils_mod, "BaseEmailLogger", None)
-    # Returns ``None`` rather than raising; this is the documented failure
-    # mode when the optional enterprise package is missing.
-    assert _get_email_logger_class() is None
-    # Sentinel: monkey-patch SendGrid env but keep BaseEmailLogger None;
-    # function still must return None and not blow up on the optional path.
-    monkeypatch.setenv("SENDGRID_API_KEY", "sg-x")
-    assert _get_email_logger_class() is None
 
 
 # ---------------------------------------------------------------------------

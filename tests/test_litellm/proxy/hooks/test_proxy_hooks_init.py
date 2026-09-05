@@ -23,4 +23,3 @@ def test_isolation_module_does_not_pull_in_proxy_utils():
     importlib.import_module("litellm.llms.base_llm.managed_resources.isolation")
     assert "litellm.proxy.utils" not in sys.modules
     assert "litellm.proxy.management_endpoints.common_utils" not in sys.modules
-
