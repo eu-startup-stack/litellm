@@ -7382,3 +7382,281 @@ async def test_handle_authentik_ui_login_role_change_updates_existing_user_throu
     upsert_call_args = mock_upsert.call_args
     assert upsert_call_args.kwargs["user_info"] is existing_user
     assert upsert_call_args.kwargs["result"] is openid
+
+
+@pytest.mark.asyncio
+async def test_google_login_routes_to_authentik_when_enabled():
+    """With enable_authentik_proxy_auth=True, /sso/key/generate delegates to
+    handle_authentik_ui_login and the OAuth provider setup does not run.
+    """
+    from litellm.proxy.management_endpoints.ui_sso import google_login
+
+    request = _authentik_request_with_headers(
+        {
+            "x-authentik-uid": "uid-abc",
+            "x-authentik-groups": "litellm-internal_user",
+        }
+    )
+
+    sentinel_redirect = MagicMock(name="authentik_redirect")
+
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch("litellm.proxy.proxy_server.master_key", "sk-1234"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler", None),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {
+                "enable_authentik_proxy_auth": True,
+                "trusted_proxy_ranges": ["127.0.0.1/32"],
+                "authentik_group_prefix": "litellm-",
+            },
+        ),
+        patch(
+            "litellm.proxy.auth.authentik_proxy.handle_authentik_ui_login",
+            AsyncMock(return_value=sentinel_redirect),
+        ) as mock_authentik_login,
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.should_use_sso_handler"
+        ) as mock_should_use,
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.get_sso_login_redirect"
+        ) as mock_get_sso_redirect,
+    ):
+        result = await google_login(request=request)
+
+    mock_authentik_login.assert_called_once()
+    assert mock_authentik_login.await_args.kwargs["request"] is request
+    assert result is sentinel_redirect
+    mock_should_use.assert_not_called()
+    mock_get_sso_redirect.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_google_login_routes_to_authentik_before_oauth_setup():
+    """The Authentik branch is checked before SSOAuthenticationHandler.should_use_sso_handler.
+
+    Records the relative order of the two callers via a single side_effect
+    list so the assertion catches both 'Authentik ran after OAuth' and
+    'OAuth never ran' as failures.
+    """
+    from litellm.proxy.management_endpoints.ui_sso import google_login
+
+    request = _authentik_request_with_headers(
+        {
+            "x-authentik-uid": "uid-abc",
+            "x-authentik-groups": "litellm-internal_user",
+        }
+    )
+
+    call_log: list[str] = []
+
+    async def _record_authentik(*_args, **_kwargs):
+        call_log.append("authentik")
+        return MagicMock(name="authentik_redirect")
+
+    def _record_should_use(*_args, **_kwargs):
+        call_log.append("oauth")
+        return True
+
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch("litellm.proxy.proxy_server.master_key", "sk-1234"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler", None),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {
+                "enable_authentik_proxy_auth": True,
+                "trusted_proxy_ranges": ["127.0.0.1/32"],
+                "authentik_group_prefix": "litellm-",
+            },
+        ),
+        patch(
+            "litellm.proxy.auth.authentik_proxy.handle_authentik_ui_login",
+            side_effect=_record_authentik,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.should_use_sso_handler",
+            side_effect=_record_should_use,
+        ),
+    ):
+        await google_login(request=request)
+
+    assert call_log[:1] == ["authentik"]
+    assert "oauth" not in call_log
+
+
+@pytest.mark.asyncio
+async def test_google_login_does_not_require_premium_user_for_authentik():
+    """Authentik is an OSS code path; premium_user must stay False and not block it.
+
+    With no env vars set and enable_authentik_proxy_auth=True in
+    general_settings, the premium_user gate must not raise even when
+    premium_user is False. (The existing premium check is gated on the
+    Microsoft/Google/Generic env vars, so this is the natural check.)
+    """
+    from litellm.proxy.management_endpoints.ui_sso import google_login
+
+    request = _authentik_request_with_headers(
+        {
+            "x-authentik-uid": "uid-abc",
+            "x-authentik-groups": "litellm-internal_user",
+        }
+    )
+
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch("litellm.proxy.proxy_server.master_key", "sk-1234"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler", None),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {
+                "enable_authentik_proxy_auth": True,
+                "trusted_proxy_ranges": ["127.0.0.1/32"],
+                "authentik_group_prefix": "litellm-",
+            },
+        ),
+        patch(
+            "litellm.proxy.auth.authentik_proxy.handle_authentik_ui_login",
+            AsyncMock(return_value=MagicMock(name="authentik_redirect")),
+        ) as mock_authentik_login,
+    ):
+        await google_login(request=request)
+
+    mock_authentik_login.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_google_login_disabled_when_authentik_setting_absent():
+    """Disabled behavior unchanged: with no SSO providers and no Authentik setting,
+    /sso/key/generate renders the legacy HTML login form (not the Authentik branch).
+    """
+    from litellm.proxy.management_endpoints.ui_sso import google_login
+
+    request = _authentik_request_with_headers({})
+
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch("litellm.proxy.proxy_server.master_key", "sk-1234"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler", None),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch(
+            "litellm.proxy.auth.authentik_proxy.handle_authentik_ui_login",
+            AsyncMock(),
+        ) as mock_authentik_login,
+    ):
+        response = await google_login(request=request)
+
+    mock_authentik_login.assert_not_called()
+    assert response.status_code == 200
+    body = response.body.decode()
+    assert "username" in body.lower()
+
+
+@pytest.mark.asyncio
+async def test_google_login_disabled_when_authentik_setting_false():
+    """Explicit False is the same as absent: no Authentik branch, no HTML form regression."""
+    from litellm.proxy.management_endpoints.ui_sso import google_login
+
+    request = _authentik_request_with_headers({})
+
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch("litellm.proxy.proxy_server.master_key", "sk-1234"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler", None),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"enable_authentik_proxy_auth": False},
+        ),
+        patch(
+            "litellm.proxy.auth.authentik_proxy.handle_authentik_ui_login",
+            AsyncMock(),
+        ) as mock_authentik_login,
+    ):
+        response = await google_login(request=request)
+
+    mock_authentik_login.assert_not_called()
+    assert response.status_code == 200
+
+
+def test_has_user_setup_sso_returns_true_when_authentik_enabled():
+    """_has_user_setup_sso reports SSO as configured when enable_authentik_proxy_auth is True."""
+    from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"enable_authentik_proxy_auth": True},
+        ),
+    ):
+        assert _has_user_setup_sso() is True
+
+
+def test_has_user_setup_sso_returns_false_when_authentik_setting_false():
+    """Explicit False does not flip SSO discovery on."""
+    from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"enable_authentik_proxy_auth": False},
+        ),
+    ):
+        assert _has_user_setup_sso() is False
+
+
+def test_has_user_setup_sso_returns_false_when_authentik_setting_absent():
+    """Setting absent and no SSO env vars: discovery stays off (unchanged behavior)."""
+    from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+    ):
+        assert _has_user_setup_sso() is False
+
+
+def test_has_user_setup_sso_returns_false_when_authentik_setting_none():
+    """None is treated like absent (falsy), not as truthy."""
+    from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"enable_authentik_proxy_auth": None},
+        ),
+    ):
+        assert _has_user_setup_sso() is False
+
+
+def test_has_user_setup_sso_keeps_existing_env_var_paths():
+    """Adding Authentik must not regress the existing MICROSOFT/GOOGLE/GENERIC discovery."""
+    from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+
+    with (
+        patch.dict(
+            os.environ,
+            {"MICROSOFT_CLIENT_ID": "ms-id", "GOOGLE_CLIENT_ID": "", "GENERIC_CLIENT_ID": ""},
+            clear=True,
+        ),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+    ):
+        assert _has_user_setup_sso() is True

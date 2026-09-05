@@ -910,6 +910,14 @@ async def google_login(
                 "Enterprise features are not available. Custom UI SSO sign-in requires LiteLLM Enterprise."
             )
 
+    if general_settings.get("enable_authentik_proxy_auth", False) is True:
+        from litellm.proxy.auth.authentik_proxy import handle_authentik_ui_login
+
+        return await handle_authentik_ui_login(
+            request=request,
+            return_to=return_to,
+        )
+
     # Check if we should use SSO handler
     if (
         SSOAuthenticationHandler.should_use_sso_handler(
