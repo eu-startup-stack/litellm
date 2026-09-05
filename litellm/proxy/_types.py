@@ -2288,6 +2288,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="CIDR ranges of trusted reverse proxies allowed to provide identity headers for header-based auth paths such as enable_oauth2_proxy_auth and custom_ui_sso_sign_in_handler.",
     )
+    enable_authentik_proxy_auth: Optional[bool] = Field(
+        False,
+        description="Accept Authentik proxy identity headers (X-authentik-*) on dashboard login when the direct peer is in trusted_proxy_ranges.",
+    )
+    authentik_group_prefix: Optional[str] = Field(
+        "litellm-",
+        description="Group-name prefix the Authentik proxy looks for to map a request to a LitellmUserRoles value. Only groups starting with this prefix are considered for role assignment.",
+    )
     store_model_in_db: Optional[bool] = Field(
         None,
         description="If True, models and config are stored in and loaded from the database. Default is False.",
