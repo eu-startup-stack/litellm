@@ -215,11 +215,11 @@ _RUNTIME_GENERAL_SETTINGS_FLAGS = [
     "disable_key_generate_for_org_admin",
 ]
 
-# Extension point: packages outside OSS (e.g. litellm_enterprise) can
-# contribute additional UI settings fields at import time. Each entry
-# maps a field name to a (annotation, FieldInfo) tuple in pydantic
-# create_model's field-definitions format. Registering a field also
-# appends it to ALLOWED_UI_SETTINGS_FIELDS so GET/PATCH pass it through.
+# Extension point: external packages can contribute additional UI settings
+# fields at import time. Each entry maps a field name to a (annotation,
+# FieldInfo) tuple in pydantic create_model's field-definitions format.
+# Registering a field also appends it to ALLOWED_UI_SETTINGS_FIELDS so
+# GET/PATCH pass it through.
 #
 # The annotation is typed ``Any`` because pydantic field annotations
 # include generics like ``Optional[int]`` / ``List[str]`` that are not

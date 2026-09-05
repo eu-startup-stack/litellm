@@ -839,7 +839,6 @@ async def google_login(
         premium_user,
         prisma_client,
         user_api_key_cache,
-        user_custom_ui_sso_sign_in_handler,
     )
 
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
@@ -894,21 +893,6 @@ async def google_login(
         key=key,
         user_code=(user_code if _cli_sso_verification_uri_complete_enabled() else None),
     )
-
-    # check if user defined a custom auth sso sign in handler, if yes, use it
-    if user_custom_ui_sso_sign_in_handler is not None:
-        try:
-            from litellm_enterprise.proxy.auth.custom_sso_handler import (  # type: ignore[import-untyped]
-                EnterpriseCustomSSOHandler,
-            )
-
-            return await EnterpriseCustomSSOHandler.handle_custom_ui_sso_sign_in(
-                request=request,
-            )
-        except ImportError:
-            raise ValueError(
-                "Enterprise features are not available. Custom UI SSO sign-in requires LiteLLM Enterprise."
-            )
 
     # Check if we should use SSO handler
     if (

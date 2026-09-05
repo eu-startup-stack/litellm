@@ -110,35 +110,6 @@ class CustomLoggerRegistry:
         "newrelic": NewRelicLogger,
     }
 
-    try:
-        from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import (
-            PagerDutyAlerting,
-        )
-        from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
-            ResendEmailLogger,
-        )
-        from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import (
-            SendGridEmailLogger,
-        )
-        from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
-            SMTPEmailLogger,
-        )
-
-        from litellm.integrations.generic_api.generic_api_callback import (
-            GenericAPILogger,
-        )
-
-        enterprise_loggers = {
-            "pagerduty": PagerDutyAlerting,
-            "generic_api": GenericAPILogger,
-            "resend_email": ResendEmailLogger,
-            "sendgrid_email": SendGridEmailLogger,
-            "smtp_email": SMTPEmailLogger,
-        }
-        CALLBACK_CLASS_STR_TO_CLASS_TYPE.update(enterprise_loggers)
-    except ImportError:
-        pass  # enterprise not installed
-
     @classmethod
     def get_callback_str_from_class_type(cls, class_type: type) -> Union[str, None]:
         """

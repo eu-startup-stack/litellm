@@ -36,7 +36,6 @@ from .guardrail_hooks.llm_as_a_judge import (
 )
 from .guardrail_initializers import (
     initialize_bedrock,
-    initialize_hide_secrets,
     initialize_lakera,
     initialize_lakera_v2,
     initialize_presidio,
@@ -48,7 +47,6 @@ guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.LAKERA.value: initialize_lakera,
     SupportedGuardrailIntegrations.LAKERA_V2.value: initialize_lakera_v2,
     SupportedGuardrailIntegrations.PRESIDIO.value: initialize_presidio,
-    SupportedGuardrailIntegrations.HIDE_SECRETS.value: initialize_hide_secrets,
     SupportedGuardrailIntegrations.TOOL_PERMISSION.value: initialize_tool_permission,
     SupportedGuardrailIntegrations.GRAYSWAN.value: initialize_grayswan,
     SupportedGuardrailIntegrations.LLM_AS_A_JUDGE.value: initialize_llm_as_a_judge,

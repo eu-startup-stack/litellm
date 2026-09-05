@@ -259,7 +259,6 @@ members = ["litellm-proxy-extras"]
 [tool.uv.build-backend]
 module-root = ""
 source-exclude = [
-    "litellm/proxy/enterprise",
     "**/__pycache__",
     "**/__pycache__/**",
     "**/.pytest_cache",

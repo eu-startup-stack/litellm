@@ -135,7 +135,6 @@ def test_cli_extra_is_a_thin_client_install():
         "cryptography",
         "apscheduler",
         "rq",
-        "litellm-enterprise",
         "litellm-proxy-extras",
     }
     leaked = cli_names & server_only

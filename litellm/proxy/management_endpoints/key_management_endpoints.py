@@ -844,20 +844,6 @@ async def _common_key_generation_helper(
         user_api_key_dict=user_api_key_dict,
     )
 
-    # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
-    try:
-        from litellm_enterprise.proxy.management_endpoints.key_management_endpoints import (
-            apply_enterprise_key_management_params,
-        )
-
-        data = apply_enterprise_key_management_params(data, team_table)
-    except Exception as e:
-        verbose_proxy_logger.debug(
-            "litellm.proxy.proxy_server.generate_key_fn(): Enterprise key management params not applied - {}".format(
-                str(e)
-            )
-        )
-
     # TODO: @ishaan-jaff: Migrate all budget tracking to use LiteLLM_BudgetTable
     _budget_id = data.budget_id
     if prisma_client is not None and data.soft_budget is not None:

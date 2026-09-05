@@ -21,7 +21,6 @@ from typing import (
     Literal,
     Optional,
     Tuple,
-    Type,
     Union,
     cast,
 )
@@ -175,40 +174,6 @@ from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 
 if TYPE_CHECKING:
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
-try:
-    from litellm_enterprise.enterprise_callbacks.callback_controls import (
-        EnterpriseCallbackControls,
-    )
-    from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import (
-        PagerDutyAlerting,
-    )
-    from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
-        ResendEmailLogger,
-    )
-    from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import (
-        SendGridEmailLogger,
-    )
-    from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
-        SMTPEmailLogger,
-    )
-    from litellm_enterprise.litellm_core_utils.litellm_logging import (
-        StandardLoggingPayloadSetup as EnterpriseStandardLoggingPayloadSetup,
-    )
-
-    from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
-
-    EnterpriseStandardLoggingPayloadSetupVAR: Optional[Type[EnterpriseStandardLoggingPayloadSetup]] = (
-        EnterpriseStandardLoggingPayloadSetup
-    )
-except Exception as e:
-    verbose_logger.debug(f"[Non-Blocking] Unable to import GenericAPILogger - LiteLLM Enterprise Feature - {str(e)}")
-    GenericAPILogger = CustomLogger  # type: ignore
-    ResendEmailLogger = CustomLogger  # type: ignore
-    SendGridEmailLogger = CustomLogger  # type: ignore
-    SMTPEmailLogger = CustomLogger  # type: ignore
-    PagerDutyAlerting = CustomLogger  # type: ignore
-    EnterpriseCallbackControls = None  # type: ignore
-    EnterpriseStandardLoggingPayloadSetupVAR = None
 _in_memory_loggers: List[Any] = []
 
 _STANDARD_LOGGING_METADATA_KEYS: frozenset = frozenset(StandardLoggingMetadata.__annotations__.keys())
@@ -1640,17 +1605,6 @@ class Logging(LiteLLMLoggingBaseClass):
             if not (isinstance(callback, CustomLogger) and "_PROXY_" in callback.__class__.__name__):
                 verbose_logger.debug(f"no-log request, skipping logging for {event_hook} event")
                 return False
-
-        # Check for dynamically disabled callbacks via headers
-        if EnterpriseCallbackControls is not None and EnterpriseCallbackControls.is_callback_disabled_dynamically(
-            callback=callback,
-            litellm_params=litellm_params,
-            standard_callback_dynamic_params=self.standard_callback_dynamic_params,
-        ):
-            verbose_logger.debug(
-                f"Callback {callback} disabled via x-litellm-disable-callbacks header for {event_hook} event"
-            )
-            return False
 
         return True
 
@@ -3992,13 +3946,6 @@ def _init_custom_logger_compatible_class(
             _otel_logger = WeaveOtelLogger(config=otel_config, callback_name="weave_otel")
             _in_memory_loggers.append(_otel_logger)
             return _otel_logger  # type: ignore
-        elif logging_integration == "pagerduty":
-            for callback in _in_memory_loggers:
-                if isinstance(callback, PagerDutyAlerting):
-                    return callback
-            pagerduty_logger = PagerDutyAlerting(**custom_logger_init_args)
-            _in_memory_loggers.append(pagerduty_logger)
-            return pagerduty_logger  # type: ignore
         elif logging_integration == "anthropic_cache_control_hook":
             for callback in _in_memory_loggers:
                 if isinstance(callback, AnthropicCacheControlHook):
@@ -4024,34 +3971,6 @@ def _init_custom_logger_compatible_class(
             _gcs_pubsub_logger = GcsPubSubLogger()
             _in_memory_loggers.append(_gcs_pubsub_logger)
             return _gcs_pubsub_logger  # type: ignore
-        elif logging_integration == "generic_api":
-            for callback in _in_memory_loggers:
-                if isinstance(callback, GenericAPILogger):
-                    return callback
-            generic_api_logger = GenericAPILogger()
-            _in_memory_loggers.append(generic_api_logger)
-            return generic_api_logger  # type: ignore
-        elif logging_integration == "resend_email":
-            for callback in _in_memory_loggers:
-                if isinstance(callback, ResendEmailLogger):
-                    return callback
-            resend_email_logger = ResendEmailLogger()
-            _in_memory_loggers.append(resend_email_logger)
-            return resend_email_logger  # type: ignore
-        elif logging_integration == "sendgrid_email":
-            for callback in _in_memory_loggers:
-                if isinstance(callback, SendGridEmailLogger):
-                    return callback
-            sendgrid_email_logger = SendGridEmailLogger()
-            _in_memory_loggers.append(sendgrid_email_logger)
-            return sendgrid_email_logger  # type: ignore
-        elif logging_integration == "smtp_email":
-            for callback in _in_memory_loggers:
-                if isinstance(callback, SMTPEmailLogger):
-                    return callback
-            smtp_email_logger = SMTPEmailLogger()
-            _in_memory_loggers.append(smtp_email_logger)
-            return smtp_email_logger  # type: ignore
         elif logging_integration == "humanloop":
             for callback in _in_memory_loggers:
                 if isinstance(callback, HumanloopLogger):
@@ -4352,10 +4271,6 @@ def get_custom_logger_compatible_class(
             for callback in _in_memory_loggers:
                 if isinstance(callback, MlflowLogger):
                     return callback
-        elif logging_integration == "pagerduty":
-            for callback in _in_memory_loggers:
-                if isinstance(callback, PagerDutyAlerting):
-                    return callback
         elif logging_integration == "anthropic_cache_control_hook":
             for callback in _in_memory_loggers:
                 if isinstance(callback, AnthropicCacheControlHook):
@@ -4371,22 +4286,6 @@ def get_custom_logger_compatible_class(
         elif logging_integration == "gcs_pubsub":
             for callback in _in_memory_loggers:
                 if isinstance(callback, GcsPubSubLogger):
-                    return callback
-        elif logging_integration == "generic_api":
-            for callback in _in_memory_loggers:
-                if isinstance(callback, GenericAPILogger):
-                    return callback
-        elif logging_integration == "resend_email":
-            for callback in _in_memory_loggers:
-                if isinstance(callback, ResendEmailLogger):
-                    return callback
-        elif logging_integration == "sendgrid_email":
-            for callback in _in_memory_loggers:
-                if isinstance(callback, SendGridEmailLogger):
-                    return callback
-        elif logging_integration == "smtp_email":
-            for callback in _in_memory_loggers:
-                if isinstance(callback, SMTPEmailLogger):
                     return callback
         elif logging_integration == "newrelic":
             for callback in _in_memory_loggers:
@@ -4635,12 +4534,6 @@ class StandardLoggingPayloadSetup:
                 and isinstance(_potential_requester_metadata, dict)
             ):
                 clean_metadata["requester_metadata"] = _potential_requester_metadata
-
-        if EnterpriseStandardLoggingPayloadSetupVAR and proxy_server_request is not None:
-            clean_metadata = EnterpriseStandardLoggingPayloadSetupVAR.apply_enterprise_specific_metadata(
-                standard_logging_metadata=clean_metadata,
-                proxy_server_request=proxy_server_request,
-            )
 
         # Generate cold storage object key if cold storage is configured
         if start_time is not None and response_id is not None:

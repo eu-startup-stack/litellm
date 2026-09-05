@@ -3593,10 +3593,6 @@ async def test_generate_key_foreign_org_with_mismatched_team_still_enforces_memb
             new_callable=AsyncMock,
         ),
         patch(
-            "litellm_enterprise.proxy.management_endpoints.key_management_endpoints.apply_enterprise_key_management_params",
-            side_effect=lambda data, team_table: data,
-        ),
-        patch(
             "litellm.proxy.management_endpoints.key_management_endpoints._validate_caller_can_assign_key_org",
             mock_validate_org,
         ),

@@ -72,15 +72,6 @@ class RouteChecks:
         """
         Check if management route is disabled and raise exception
         """
-        try:
-            from litellm_enterprise.proxy.auth.route_checks import EnterpriseRouteChecks
-
-            EnterpriseRouteChecks.should_call_route(route=route)
-        except HTTPException as e:
-            raise e
-        except Exception:
-            pass
-
         # Check if Virtual Key is allowed to call the route - Applies to all Roles
         RouteChecks.is_virtual_key_allowed_to_call_route(route=route, valid_token=valid_token, request=request)
         return True

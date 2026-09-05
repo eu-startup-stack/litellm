@@ -606,29 +606,7 @@ from fastapi.staticfiles import StaticFiles
 
 from litellm.types.agents import AgentConfig
 
-# import enterprise folder
 enterprise_router = APIRouter()
-try:
-    # when using litellm cli
-    import litellm.proxy.enterprise as enterprise
-except Exception:
-    # when using litellm docker image
-    try:
-        import enterprise  # type: ignore
-    except Exception:
-        pass
-
-###################
-# Import enterprise routes
-try:
-    from litellm_enterprise.proxy.enterprise_routes import router as _enterprise_router
-    from litellm_enterprise.proxy.proxy_server import EnterpriseProxyConfig
-
-    enterprise_router = _enterprise_router
-    enterprise_proxy_config: Optional[EnterpriseProxyConfig] = EnterpriseProxyConfig()
-except ImportError:
-    enterprise_proxy_config = None
-###################
 
 server_root_path = get_server_root_path()
 _license_check = LicenseCheck()
@@ -4429,9 +4407,6 @@ class ProxyConfig:
                     config_file_path=config_file_path,
                 )
 
-            if enterprise_proxy_config is not None:
-                await enterprise_proxy_config.load_enterprise_config(general_settings)
-
             ## pass through endpoints
             if general_settings.get("pass_through_endpoints", None) is not None:
                 config_passthrough_endpoints = general_settings["pass_through_endpoints"]
@@ -7616,64 +7591,7 @@ class ProxyStartupEvent:
                     )
                 except ValueError:
                     verbose_proxy_logger.error("Invalid maximum_spend_logs_retention_interval value")
-        ### CHECK BATCH COST ###
-        if llm_router is not None and PROXY_BATCH_POLLING_ENABLED:
-            try:
-                from litellm_enterprise.proxy.common_utils.check_batch_cost import (
-                    CheckBatchCost,
-                )
 
-                check_batch_cost_job = CheckBatchCost(
-                    proxy_logging_obj=proxy_logging_obj,
-                    prisma_client=prisma_client,
-                    llm_router=llm_router,
-                )
-                scheduler.add_job(
-                    check_batch_cost_job.check_batch_cost,
-                    "interval",
-                    seconds=proxy_batch_polling_interval + random.randint(0, 30),  # Add small random offset
-                    # REMOVED jitter parameter - major cause of memory leak
-                    id="check_batch_cost_job",
-                    replace_existing=True,
-                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-                )
-                verbose_proxy_logger.info("Batch cost check job scheduled successfully")
-
-            except Exception as e:
-                verbose_proxy_logger.debug(f"Failed to setup batch cost checking: {e}")
-                verbose_proxy_logger.debug(
-                    "Checking batch cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
-                )
-                pass
-
-        ### CHECK RESPONSES COST ###
-        if llm_router is not None and PROXY_BATCH_POLLING_ENABLED:
-            try:
-                from litellm_enterprise.proxy.common_utils.check_responses_cost import (
-                    CheckResponsesCost,
-                )
-
-                check_responses_cost_job = CheckResponsesCost(
-                    proxy_logging_obj=proxy_logging_obj,
-                    prisma_client=prisma_client,
-                    llm_router=llm_router,
-                )
-                scheduler.add_job(
-                    check_responses_cost_job.check_responses_cost,
-                    "interval",
-                    seconds=proxy_batch_polling_interval + random.randint(0, 30),  # Add small random offset
-                    # REMOVED jitter parameter - major cause of memory leak
-                    id="check_responses_cost_job",
-                    replace_existing=True,
-                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-                )
-                verbose_proxy_logger.info("Responses cost check job scheduled successfully")
-
-            except Exception as e:
-                verbose_proxy_logger.debug(f"Failed to setup responses cost checking: {e}")
-                verbose_proxy_logger.debug(
-                    "Checking responses cost for LiteLLM Managed Files is an Enterprise Feature. Skipping..."
-                )
                 pass
 
         # MEMORY LEAK FIX: Start scheduler with paused=False to avoid backlog processing
