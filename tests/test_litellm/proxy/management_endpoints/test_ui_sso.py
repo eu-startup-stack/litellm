@@ -7681,3 +7681,266 @@ def test_has_user_setup_sso_returns_false_for_truthy_non_bool_setting():
         ),
     ):
         assert _has_user_setup_sso() is False
+
+
+# ---------------------------------------------------------------------------
+# C2 guard: ui_access_mode="admin_only" must be threaded through to the
+# downstream SSO pipeline on the Authentik path.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_handle_authentik_ui_login_threads_ui_access_mode_admin_only_to_pipeline():
+    """When ``ui_access_mode='admin_only'`` is set and an
+    ``litellm-internal_user`` arrives, the existing pipeline's
+    ``check_is_admin_only_access`` raises HTTPException(401). We assert
+    that ``handle_authentik_ui_login`` passes ``ui_access_mode`` through
+    so the admin-only check actually fires on the Authentik path.
+
+    Without this fix the Authentik branch silently defaults ``ui_access_mode``
+    to ``None`` and the operator's deny control is a no-op.
+    """
+    from litellm.proxy.auth.authentik_proxy import handle_authentik_ui_login
+
+    request = _authentik_request_with_headers(
+        {
+            "x-authentik-uid": "uid-abc",
+            "x-authentik-groups": "litellm-internal_user",
+        }
+    )
+
+    captured: dict = {}
+
+    async def _fake_pipeline(*_args, **kwargs):
+        captured["ui_access_mode"] = kwargs.get("ui_access_mode")
+        # Simulate what the real check does for non-admin roles when admin_only is on.
+        if kwargs.get("ui_access_mode") == "admin_only":
+            raise HTTPException(
+                status_code=401,
+                detail={"error": "User not allowed to access proxy"},
+            )
+        return MagicMock()
+
+    with (
+        patch.dict(
+            "litellm.proxy.proxy_server.general_settings",
+            {
+                "trusted_proxy_ranges": ["127.0.0.1/32"],
+                "authentik_group_prefix": "litellm-",
+                "ui_access_mode": "admin_only",
+            },
+            clear=False,
+        ),
+        patch.object(
+            SSOAuthenticationHandler,
+            "get_redirect_response_from_openid",
+            side_effect=_fake_pipeline,
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await handle_authentik_ui_login(request=request, return_to=None)
+
+    assert exc.value.status_code == 401
+    assert captured["ui_access_mode"] == "admin_only"
+
+
+@pytest.mark.asyncio
+async def test_handle_authentik_ui_login_threads_dict_ui_access_mode():
+    """The dict-form ``ui_access_mode`` (e.g. ``restricted_sso_group``)
+    must also be threaded through unchanged. The admin-only check is
+    skipped for dict inputs, but downstream logic that reads the dict
+    still needs the real value.
+    """
+    from litellm.proxy.auth.authentik_proxy import handle_authentik_ui_login
+
+    request = _authentik_request_with_headers(
+        {
+            "x-authentik-uid": "uid-abc",
+            "x-authentik-groups": "litellm-internal_user",
+        }
+    )
+
+    admin_only_dict = {
+        "type": "restricted_sso_group",
+        "restricted_sso_group": "litellm-dashboard",
+    }
+    captured: dict = {}
+
+    async def _capture(*_args, **kwargs):
+        captured["ui_access_mode"] = kwargs.get("ui_access_mode")
+        return MagicMock()
+
+    with (
+        patch.dict(
+            "litellm.proxy.proxy_server.general_settings",
+            {
+                "trusted_proxy_ranges": ["127.0.0.1/32"],
+                "authentik_group_prefix": "litellm-",
+                "ui_access_mode": admin_only_dict,
+            },
+            clear=False,
+        ),
+        patch.object(
+            SSOAuthenticationHandler,
+            "get_redirect_response_from_openid",
+            side_effect=_capture,
+        ),
+    ):
+        await handle_authentik_ui_login(request=request, return_to=None)
+
+    assert captured["ui_access_mode"] == admin_only_dict
+
+
+# ---------------------------------------------------------------------------
+# I3 guard: CLI source on /sso/key/generate with Authentik enabled must
+# fail loudly with 400, not silently redirect to the dashboard.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_google_login_rejects_cli_source_when_authentik_enabled():
+    """With ``enable_authentik_proxy_auth=True`` and ``source=litellm-cli``,
+    the Authentik branch must refuse with HTTPException(400). Without
+    this fix, the Authentik branch returns a dashboard redirect and
+    discards the CLI state, so the CLI's polling times out with no
+    error to the user.
+    """
+    from litellm.proxy.management_endpoints.ui_sso import google_login
+
+    request = _authentik_request_with_headers(
+        {
+            "x-authentik-uid": "uid-abc",
+            "x-authentik-groups": "litellm-internal_user",
+        }
+    )
+
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch("litellm.proxy.proxy_server.master_key", "sk-1234"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler", None),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {
+                "enable_authentik_proxy_auth": True,
+                "trusted_proxy_ranges": ["127.0.0.1/32"],
+                "authentik_group_prefix": "litellm-",
+            },
+        ),
+        patch(
+            "litellm.proxy.auth.authentik_proxy.handle_authentik_ui_login",
+            AsyncMock(),
+        ) as mock_authentik_login,
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await google_login(
+                request=request,
+                source="litellm-cli",
+                key="cli-anything",
+                user_code="ABCD-1234",
+            )
+
+    assert exc.value.status_code == 400
+    assert "CLI SSO login is not supported" in str(exc.value.detail)
+    mock_authentik_login.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# M2 guard: Authentik-enabled deployments must not be blocked by the
+# premium_user gate when OAuth/SSO env vars happen to be set.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_google_login_does_not_block_authentik_on_premium_gate_with_stale_env():
+    """When Authentik is enabled and a deployment has stale
+    ``MICROSOFT_CLIENT_ID``/``GOOGLE_CLIENT_ID``/``GENERIC_CLIENT_ID``
+    env vars (e.g. left over from a generic-OIDC migration), the
+    premium gate must NOT trigger and refuse the request. Authentik
+    is OSS; the gate applies only to OAuth/SSO.
+    """
+    from litellm.proxy.management_endpoints.ui_sso import google_login
+
+    request = _authentik_request_with_headers(
+        {
+            "x-authentik-uid": "uid-abc",
+            "x-authentik-groups": "litellm-internal_user",
+        }
+    )
+
+    sentinel_redirect = MagicMock(name="authentik_redirect")
+
+    with (
+        patch.dict(
+            os.environ,
+            {"MICROSOFT_CLIENT_ID": "stale", "GENERIC_CLIENT_ID": "stale"},
+            clear=True,
+        ),
+        patch("litellm.proxy.proxy_server.master_key", "sk-1234"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler", None),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {
+                "enable_authentik_proxy_auth": True,
+                "trusted_proxy_ranges": ["127.0.0.1/32"],
+                "authentik_group_prefix": "litellm-",
+            },
+        ),
+        patch(
+            "litellm.proxy.auth.authentik_proxy.handle_authentik_ui_login",
+            AsyncMock(return_value=sentinel_redirect),
+        ) as mock_authentik_login,
+    ):
+        result = await google_login(request=request)
+
+    assert result is sentinel_redirect
+    mock_authentik_login.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# M5 guard: _has_user_setup_sso must use _get_proxy_general_settings so
+# partial-import failures don't bite.
+# ---------------------------------------------------------------------------
+
+
+def test_has_user_setup_sso_uses_trusted_proxy_helper():
+    """When ``proxy_server`` is partially initialised, ``general_settings``
+    may not be importable. ``_has_user_setup_sso`` must not blow up —
+    it uses ``_get_proxy_general_settings`` which returns ``{}`` on
+    ImportError. The Authentik branch must still come up as enabled.
+
+    We patch the helper the function imports and verify the result
+    matches the helper's return value, not a direct ``proxy_server``
+    import. The original code did ``from litellm.proxy.proxy_server
+    import general_settings`` without a guard, which would raise
+    ``ImportError`` mid-function; this test would fail under that
+    implementation only if the patched helper's return value is NOT
+    what the function uses, so it's the regression guard for the
+    helper reuse.
+    """
+    from litellm.proxy.auth.auth_utils import _has_user_setup_sso
+
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch(
+            "litellm.proxy.auth.trusted_proxy_utils._get_proxy_general_settings",
+            return_value={"enable_authentik_proxy_auth": True},
+        ),
+    ):
+        assert _has_user_setup_sso() is True
+
+    # And when the helper returns an empty dict (the ImportError fallback),
+    # the function reports SSO not set up.
+    with (
+        patch.dict(os.environ, {}, clear=True),
+        patch(
+            "litellm.proxy.auth.trusted_proxy_utils._get_proxy_general_settings",
+            return_value={},
+        ),
+    ):
+        assert _has_user_setup_sso() is False

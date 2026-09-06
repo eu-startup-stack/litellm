@@ -1038,7 +1038,9 @@ def _has_user_setup_sso():
     Check if the user has set up single sign-on (SSO) by verifying the presence of Microsoft client ID, Google client ID or generic client ID environment variables, or by enabling the Authentik proxy auth provider in ``general_settings``.
     Returns a boolean indicating whether SSO has been set up.
     """
-    from litellm.proxy.proxy_server import general_settings
+    from litellm.proxy.auth.trusted_proxy_utils import _get_proxy_general_settings
+
+    general_settings = _get_proxy_general_settings()
 
     microsoft_client_id = os.getenv("MICROSOFT_CLIENT_ID", None)
     google_client_id = os.getenv("GOOGLE_CLIENT_ID", None)

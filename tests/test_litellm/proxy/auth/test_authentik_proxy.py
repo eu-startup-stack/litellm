@@ -162,7 +162,7 @@ def test_trusted_peer_with_valid_headers_returns_identity(proxy_settings) -> Non
     )
 
 
-def test_untrusted_peer_raises_trust_error_without_reading_identity(proxy_settings) -> None:
+def test_untrusted_peer_returns_401_without_reading_identity(proxy_settings) -> None:
     settings = proxy_settings(trusted_proxy_ranges=["10.0.0.0/24"])
     request = _request_with_headers(
         {
@@ -172,11 +172,13 @@ def test_untrusted_peer_raises_trust_error_without_reading_identity(proxy_settin
         client_host="203.0.113.10",
     )
 
-    with pytest.raises(ValueError, match="not trusted"):
+    with pytest.raises(HTTPException) as exc:
         authentik_identity_from_request(request, settings)
+    assert exc.value.status_code == 401
+    assert "not trusted" in str(exc.value.detail)
 
 
-def test_absent_trusted_proxy_ranges_raises_trust_error(proxy_settings) -> None:
+def test_absent_trusted_proxy_ranges_returns_401(proxy_settings) -> None:
     settings = proxy_settings(trusted_proxy_ranges=None)
     request = _request_with_headers(
         {
@@ -185,8 +187,10 @@ def test_absent_trusted_proxy_ranges_raises_trust_error(proxy_settings) -> None:
         }
     )
 
-    with pytest.raises(ValueError, match="trusted_proxy_ranges"):
+    with pytest.raises(HTTPException) as exc:
         authentik_identity_from_request(request, settings)
+    assert exc.value.status_code == 401
+    assert "trusted_proxy_ranges" in str(exc.value.detail)
 
 
 def test_missing_username_and_uid_raises_identity_error(proxy_settings) -> None:
@@ -305,8 +309,131 @@ def test_denial_occurs_before_any_provisioning_call(proxy_settings) -> None:
             side_effect=record_resolve,
         ),
     ):
-        with pytest.raises(ValueError, match="not trusted"):
+        with pytest.raises(HTTPException) as exc:
             authentik_identity_from_request(request, settings)
+        assert exc.value.status_code == 401
 
     assert call_log == ["trust_check"]
     assert "resolve_role" not in call_log
+
+
+def test_duplicate_authentik_groups_header_returns_401(proxy_settings) -> None:
+    """A forged duplicate X-authentik-groups must be rejected, not resolved
+    by positional luck.
+
+    Constructs a request with two values of X-authentik-groups, the first
+    of which carries the privileged ``litellm-proxy_admin`` group. Without
+    the duplicate-header guard, ``request.headers.get`` returns the first
+    value and the caller gets an admin session despite the second value
+    being the legitimate Authentik-supplied ``litellm-internal_user``.
+    """
+    from starlette.datastructures import Headers
+
+    settings = proxy_settings()
+    raw_headers = [
+        (b"x-authentik-uid", b"uid-abc"),
+        (b"x-authentik-groups", b"litellm-proxy_admin"),
+        (b"x-authentik-groups", b"litellm-internal_user"),
+    ]
+    request = Request(
+        scope={
+            "type": "http",
+            "client": ("127.0.0.1", 12345),
+            "headers": raw_headers,
+        }
+    )
+    request._headers = Headers(raw=raw_headers)
+
+    with pytest.raises(HTTPException) as exc:
+        authentik_identity_from_request(request, settings)
+    assert exc.value.status_code == 401
+    assert "Duplicate" in str(exc.value.detail)
+    assert "x-authentik-groups" in str(exc.value.detail)
+
+
+def test_duplicate_authentik_uid_header_returns_401(proxy_settings) -> None:
+    """All five Authentik identity headers are guarded; uid is the most
+    privilege-sensitive. A forged duplicate must be rejected before any
+    downstream code can read it.
+    """
+    from starlette.datastructures import Headers
+
+    settings = proxy_settings()
+    raw_headers = [
+        (b"x-authentik-uid", b"uid-forged"),
+        (b"x-authentik-uid", b"uid-real"),
+    ]
+    request = Request(
+        scope={
+            "type": "http",
+            "client": ("127.0.0.1", 12345),
+            "headers": raw_headers,
+        }
+    )
+    request._headers = Headers(raw=raw_headers)
+
+    with pytest.raises(HTTPException) as exc:
+        authentik_identity_from_request(request, settings)
+    assert exc.value.status_code == 401
+    assert "Duplicate" in str(exc.value.detail)
+
+
+def test_enforce_authentik_proxy_startup_guards_disables_when_forwarded_allow_ips_is_star(
+    monkeypatch,
+) -> None:
+    """The startup guard fails closed on FORWARDED_ALLOW_IPS='*': the only
+    configuration in which the app-level direct-peer trust check is
+    forgeable. The feature is flipped off in the same dict so all
+    subsequent reads see the disabled flag.
+    """
+    from litellm.proxy.auth.authentik_proxy import enforce_authentik_proxy_startup_guards
+
+    monkeypatch.setenv("FORWARDED_ALLOW_IPS", "*")
+    settings = {"enable_authentik_proxy_auth": True}
+    enforce_authentik_proxy_startup_guards(settings)
+    assert settings["enable_authentik_proxy_auth"] is False
+
+
+def test_enforce_authentik_proxy_startup_guards_leaves_feature_on_when_forwarded_allow_ips_narrow(
+    monkeypatch,
+) -> None:
+    """When FORWARDED_ALLOW_IPS is narrow or unset, the guard leaves the
+    feature enabled.
+    """
+    from litellm.proxy.auth.authentik_proxy import enforce_authentik_proxy_startup_guards
+
+    monkeypatch.delenv("FORWARDED_ALLOW_IPS", raising=False)
+    settings = {"enable_authentik_proxy_auth": True}
+    enforce_authentik_proxy_startup_guards(settings)
+    assert settings["enable_authentik_proxy_auth"] is True
+
+    monkeypatch.setenv("FORWARDED_ALLOW_IPS", "127.0.0.1/32")
+    enforce_authentik_proxy_startup_guards(settings)
+    assert settings["enable_authentik_proxy_auth"] is True
+
+
+def test_enforce_authentik_proxy_startup_guards_noop_when_feature_disabled(monkeypatch) -> None:
+    """When the feature is not enabled, FORWARDED_ALLOW_IPS='*' is irrelevant
+    and the dict is left alone.
+    """
+    from litellm.proxy.auth.authentik_proxy import enforce_authentik_proxy_startup_guards
+
+    monkeypatch.setenv("FORWARDED_ALLOW_IPS", "*")
+    settings: dict = {}
+    enforce_authentik_proxy_startup_guards(settings)
+    assert "enable_authentik_proxy_auth" not in settings
+
+
+def test_role_privilege_tracks_role_by_suffix() -> None:
+    """M1 guard: ``_ROLE_PRIVILEGE`` is derived from ``_ROLE_BY_SUFFIX`` so
+    adding a role to the dict cannot desync the privilege ordering.
+
+    The M1 fix is structural (``tuple(_ROLE_BY_SUFFIX.values())``), not a
+    behavioural change — the current 4 roles already match, so the test
+    cannot show a meaningful RED against the original duplicated tuple.
+    Instead, it pins the structural invariant: if a future refactor
+    reintroduces a separate literal, this test fires.
+    """
+    from litellm.proxy.auth.authentik_proxy import _ROLE_BY_SUFFIX, _ROLE_PRIVILEGE
+
+    assert _ROLE_PRIVILEGE == tuple(_ROLE_BY_SUFFIX.values())

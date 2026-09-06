@@ -4311,6 +4311,11 @@ class ProxyConfig:
         _enable_hc_routing = False
         _hc_staleness = None
         _hc_ignore_transient = False
+        from litellm.proxy.auth.authentik_proxy import (
+            enforce_authentik_proxy_startup_guards,
+        )
+
+        enforce_authentik_proxy_startup_guards(general_settings)
         if general_settings:
             ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
             key_management_settings = general_settings.get("key_management_settings", None)

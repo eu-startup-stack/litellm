@@ -855,7 +855,7 @@ async def google_login(
 
     ####### Check if user is a Enterprise / Premium User #######
     if microsoft_client_id is not None or google_client_id is not None or generic_client_id is not None:
-        if premium_user is not True:
+        if general_settings.get("enable_authentik_proxy_auth", False) is not True and premium_user is not True:
             # Check if under 'free SSO user' limit
             if prisma_client is not None:
                 billable_users = await UserRepository(prisma_client).count_billable_users()
@@ -886,6 +886,11 @@ async def google_login(
     )
 
     if source == LITELLM_CLI_SOURCE_IDENTIFIER:
+        if general_settings.get("enable_authentik_proxy_auth", False) is True:
+            raise HTTPException(
+                status_code=400,
+                detail=("CLI SSO login is not supported with Authentik proxy auth. Use a virtual key."),
+            )
         _get_cli_sso_flow_or_raise(login_id=key, cache=user_api_key_cache)
 
     # Store CLI login handle in state for OAuth flow

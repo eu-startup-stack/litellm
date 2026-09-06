@@ -2290,7 +2290,16 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     enable_authentik_proxy_auth: Optional[bool] = Field(
         False,
-        description="Accept Authentik proxy identity headers (X-authentik-*) on dashboard login when the direct peer is in trusted_proxy_ranges.",
+        description=(
+            "Accept Authentik proxy identity headers (X-authentik-*) on dashboard "
+            "login when the direct peer is in trusted_proxy_ranges. Operators MUST "
+            "configure trusted_proxy_ranges with the CIDR of the reverse proxy "
+            "injecting those headers and MUST NOT set FORWARDED_ALLOW_IPS to '*'; "
+            "the ASGI server will otherwise rewrite scope['client'] from "
+            "X-Forwarded-For and the trust check becomes forgeable. The reverse "
+            "proxy MUST strip any client-supplied X-authentik-* headers before "
+            "re-injecting its own (replace, do not append)."
+        ),
     )
     authentik_group_prefix: Optional[str] = Field(
         "litellm-",

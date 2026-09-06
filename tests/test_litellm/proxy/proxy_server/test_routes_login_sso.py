@@ -239,6 +239,97 @@ def test_login_form_still_authenticates_when_authentik_enabled(client, monkeypat
     }
 
 
+def _untrusted_test_client(app, *, client_host: str):
+    """Build a TestClient whose scope['client'] reports the given host.
+
+    The default TestClient uses ``('testclient', 50000)`` which is not an
+    IP and would fail ``ip_in_networks``; we need a real IP to exercise
+    the trust check at the route level.
+    """
+    from fastapi.testclient import TestClient
+
+    return TestClient(app, raise_server_exceptions=False, client=(client_host, 12345))
+
+
+def test_sso_key_generate_untrusted_peer_returns_401_not_500(app, monkeypatch):
+    """I1 guard: when ``enable_authentik_proxy_auth=True`` and the peer is
+    NOT in ``trusted_proxy_ranges``, /sso/key/generate returns 401 — not
+    a 500 with a full ERROR-level traceback.
+
+    Before this fix, the ``ValueError`` from
+    ``require_trusted_proxy_request`` was caught by nothing and fell
+    through to the generic 500 in the app-level exception handler.
+    """
+    from litellm.proxy import proxy_server as ps
+
+    monkeypatch.setattr(ps, "master_key", "sk-test-master")
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(ps, "premium_user", False)
+    monkeypatch.setattr(ps, "user_api_key_cache", MagicMock())
+    monkeypatch.setattr(ps, "user_custom_ui_sso_sign_in_handler", None)
+    monkeypatch.setattr(
+        ps,
+        "general_settings",
+        {
+            "enable_authentik_proxy_auth": True,
+            "trusted_proxy_ranges": ["127.0.0.1/32"],
+            "authentik_group_prefix": "litellm-",
+        },
+    )
+    monkeypatch.delenv("MICROSOFT_CLIENT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("GENERIC_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DISABLE_ADMIN_UI", raising=False)
+
+    test_client = _untrusted_test_client(app, client_host="203.0.113.10")
+    response = test_client.get(
+        "/sso/key/generate",
+        headers={
+            "x-authentik-uid": "uid-abc",
+            "x-authentik-groups": "litellm-proxy_admin",
+        },
+    )
+
+    assert response.status_code == 401, f"Got {response.status_code}: {response.text[:500]}"
+    assert "not trusted" in str(response.text)
+
+
+def test_sso_key_generate_missing_trusted_proxy_ranges_returns_401(app, monkeypatch):
+    """I1 guard for the absent-ranges case: 401, not 500."""
+    from litellm.proxy import proxy_server as ps
+
+    monkeypatch.setattr(ps, "master_key", "sk-test-master")
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(ps, "premium_user", False)
+    monkeypatch.setattr(ps, "user_api_key_cache", MagicMock())
+    monkeypatch.setattr(ps, "user_custom_ui_sso_sign_in_handler", None)
+    monkeypatch.setattr(
+        ps,
+        "general_settings",
+        {
+            "enable_authentik_proxy_auth": True,
+            "trusted_proxy_ranges": None,
+            "authentik_group_prefix": "litellm-",
+        },
+    )
+    monkeypatch.delenv("MICROSOFT_CLIENT_ID", raising=False)
+    monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("GENERIC_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DISABLE_ADMIN_UI", raising=False)
+
+    test_client = _untrusted_test_client(app, client_host="127.0.0.1")
+    response = test_client.get(
+        "/sso/key/generate",
+        headers={
+            "x-authentik-uid": "uid-abc",
+            "x-authentik-groups": "litellm-proxy_admin",
+        },
+    )
+
+    assert response.status_code == 401, f"Got {response.status_code}: {response.text[:500]}"
+    assert "trusted_proxy_ranges" in str(response.text)
+
+
 # ---------------------------------------------------------------------------
 # POST /v2/login
 # ---------------------------------------------------------------------------

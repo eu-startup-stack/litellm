@@ -26,27 +26,73 @@ What this module deliberately does NOT do
 
 - accept roles, budgets, models, permissions, or keys from
   headers — those are policy grants, never identity;
-- trust ``X-Forwarded-For`` — only the direct TCP peer is
-  authoritative for the trust decision;
+- read ``X-Forwarded-For`` directly. The trust check uses
+  ``request.client.host`` (the ASGI ``scope["client"]``), which the
+  ASGI server MAY have rewritten from ``X-Forwarded-For`` if
+  ``FORWARDED_ALLOW_IPS`` is set. Operators MUST run LiteLLM with
+  ``FORWARDED_ALLOW_IPS`` unset or set to the specific CIDR of the
+  reverse proxy in front of LiteLLM, and MUST NOT set it to ``*``.
+  When ``FORWARDED_ALLOW_IPS='*'`` is detected at config load time,
+  ``enforce_authentik_proxy_startup_guards`` fails closed and disables
+  the feature.
 - reimplement user lookup, upsert, key generation, JWT signing,
   cookies, or redirects.
 """
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from fastapi import HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, ConfigDict
 
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.auth.trusted_proxy_utils import require_trusted_proxy_request
 from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
 
 _AUTHENTIK_FEATURE_NAME = "Authentik proxy auth"
+_AUTHENTIK_FEATURE_SETTING = "enable_authentik_proxy_auth"
 _AUTHENTIK_GROUP_PREFIX_SETTING = "authentik_group_prefix"
 _AUTHENTIK_GROUP_PREFIX_DEFAULT = "litellm-"
+_AUTHENTIK_IDENTITY_HEADERS: tuple[str, ...] = (
+    "x-authentik-uid",
+    "x-authentik-username",
+    "x-authentik-groups",
+    "x-authentik-email",
+    "x-authentik-name",
+)
+
+
+def enforce_authentik_proxy_startup_guards(general_settings: dict[str, Any]) -> None:
+    """
+    Fail-closed check on the configuration in which the app-level trust
+    decision is forgeable.
+
+    Uvicorn's ``ProxyHeadersMiddleware`` rewrites ``scope["client"]``
+    from ``X-Forwarded-For`` for any peer listed in
+    ``FORWARDED_ALLOW_IPS``. With ``FORWARDED_ALLOW_IPS='*'`` any
+    caller can spoof the client IP, and the direct-peer trust check
+    becomes equivalent to trusting ``X-Forwarded-For`` from any
+    source. We disable the feature rather than start in that state.
+
+    Call once from the config-load path after ``general_settings`` is
+    parsed. The dict is mutated in place so subsequent reads see the
+    disabled flag.
+    """
+    if general_settings.get(_AUTHENTIK_FEATURE_SETTING, False) is not True:
+        return
+    if os.environ.get("FORWARDED_ALLOW_IPS") == "*":
+        verbose_proxy_logger.error(
+            "Authentik proxy auth is DISABLED because FORWARDED_ALLOW_IPS='*' "
+            "would let any caller spoof X-Forwarded-For and bypass the "
+            "direct-peer trust check. Set FORWARDED_ALLOW_IPS to the "
+            "reverse proxy's CIDR (e.g. '127.0.0.1/32') or unset it, then "
+            "re-enable enable_authentik_proxy_auth."
+        )
+        general_settings[_AUTHENTIK_FEATURE_SETTING] = False
 
 
 # Privilege order, highest first. Unknown prefixed groups are ignored.
@@ -59,13 +105,9 @@ _ROLE_BY_SUFFIX: dict[str, LitellmUserRoles] = {
 
 
 # Highest privilege first; used by ``resolve_authentik_role`` to pick
-# the winning match when several prefixed groups are present.
-_ROLE_PRIVILEGE: tuple[LitellmUserRoles, ...] = (
-    LitellmUserRoles.PROXY_ADMIN,
-    LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-    LitellmUserRoles.INTERNAL_USER,
-    LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-)
+# the winning match when several prefixed groups are present. Built from
+# ``_ROLE_BY_SUFFIX.values()`` so adding a new role can't desync the two.
+_ROLE_PRIVILEGE: tuple[LitellmUserRoles, ...] = tuple(_ROLE_BY_SUFFIX.values())
 
 
 class AuthentikIdentity(BaseModel):
@@ -134,13 +176,34 @@ def authentik_identity_from_request(
 
     Order matters: the trust check runs first and short-circuits
     before any header is read, so an untrusted peer can never
-    exercise role resolution or downstream provisioning.
+    exercise role resolution or downstream provisioning. The trust
+    check raises ``ValueError`` to signal a policy decision; we map
+    that to ``HTTPException(401)`` so the route returns a clean 401
+    rather than letting ``ValueError`` fall through to the generic
+    500 in the app-level exception handler (with a full ERROR-level
+    traceback per request).
     """
-    require_trusted_proxy_request(
-        request=request,
-        general_settings=general_settings,
-        feature_name=_AUTHENTIK_FEATURE_NAME,
-    )
+    try:
+        require_trusted_proxy_request(
+            request=request,
+            general_settings=general_settings,
+            feature_name=_AUTHENTIK_FEATURE_NAME,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+        ) from exc
+
+    for _header_name in _AUTHENTIK_IDENTITY_HEADERS:
+        if len(request.headers.getlist(_header_name)) > 1:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=(
+                    f"Duplicate {_header_name} header — the trusted proxy "
+                    "must replace, not append, Authentik identity headers."
+                ),
+            )
 
     user_id = _read_header(request, "X-authentik-uid") or _read_header(request, "X-authentik-username")
     if not user_id:
@@ -218,5 +281,6 @@ async def handle_authentik_ui_login(
     return await SSOAuthenticationHandler.get_redirect_response_from_openid(
         result=openid,
         request=request,
+        ui_access_mode=general_settings.get("ui_access_mode", None),
         return_to=return_to,
     )
